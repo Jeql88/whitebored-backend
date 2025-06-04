@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend/whiteboard-service
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./backend/whiteboard-service:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+
+  auth-service:
+    build: ./backend/auth-service
+    ports:
+      - "4001:4001"
+    volumes:
+      - ./backend/auth-service:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+
+  whiteboard-frontend:
+    build: ./whiteboard-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./whiteboard-frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development

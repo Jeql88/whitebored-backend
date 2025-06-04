@@ -1,5 +1,5 @@
 {
-  "name": "backend",
+  "name": "auth-service",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -11,10 +11,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "bcrypt": "^5.1.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "mongodb": "^6.16.0",
-    "socket.io": "^4.8.1",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.16.0"
   }
 }
