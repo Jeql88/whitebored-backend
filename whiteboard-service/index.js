@@ -8,7 +8,7 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: 'http://localhost:5173', methods: ['GET', 'POST'] }
+  cors: { origin: 'http://localhost:5173', methods: ['GET', 'POST', 'PATCH', 'DELETE'] }
 });
 
 app.use(cors());
@@ -100,6 +100,57 @@ app.post('/whiteboards', authMiddleware, async (req, res) => {
   const result = await whiteboards.insertOne({ name, userId: req.user.userId });
   res.json({ _id: result.insertedId, name });
 });
+
+app.patch('/whiteboards/:id', authMiddleware, async (req, res) => {
+  const whiteboardId = req.params.id;
+  const userId = req.user.userId;
+  const { name } = req.body;
+
+  console.log('PATCH /whiteboards/:id called with:', whiteboardId, userId);
+
+  if (!name) {
+    return res.status(400).json({ error: 'New name is required' });
+  }
+
+  try {
+    const result = await whiteboards.updateOne(
+      { _id: new ObjectId(whiteboardId), userId },
+      { $set: { name } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: 'Whiteboard not found or unauthorized' });
+    }
+
+    res.json({ success: true, message: 'Whiteboard renamed' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/whiteboards/:id', authMiddleware, async (req, res) => {
+  const whiteboardId = req.params.id;
+  const userId = req.user.userId;
+  
+  try {
+    // Ensure the whiteboard belongs to the requesting user
+    const result = await whiteboards.deleteOne({ _id: new ObjectId(whiteboardId), userId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Whiteboard not found or unauthorized' });
+    }
+
+    // Remove associated draw events
+    await drawEvents.deleteMany({ whiteboardId });
+
+    res.json({ success: true, message: 'Whiteboard deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 
 server.listen(4000, () => {
   console.log('Whiteboard service running on port 4000');
