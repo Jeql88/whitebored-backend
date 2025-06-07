@@ -31,9 +31,14 @@ client.connect().then(() => {
 
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
-    if (!token) return next(new Error("No token"));
+    if (!token) {
+      // Guest user
+      socket.user = { userId: socket.id, isGuest: true };
+      return next();
+    }
     try {
       socket.user = jwt.verify(token, JWT_SECRET);
+      socket.user.isGuest = false;
       next();
     } catch {
       next(new Error("Invalid token"));
@@ -77,7 +82,10 @@ client.connect().then(() => {
           });
           await whiteboards.updateOne(
             { _id: new ObjectId(whiteboardId) },
-            { $set: { updatedAt: new Date() } }
+            {
+              $set: { updatedAt: new Date() },
+              $addToSet: { editors: userId }, // <-- add this line
+            }
           );
         }
       );
@@ -113,7 +121,10 @@ client.connect().then(() => {
           });
           await whiteboards.updateOne(
             { _id: new ObjectId(whiteboardId) },
-            { $set: { updatedAt: new Date() } }
+            {
+              $set: { updatedAt: new Date() },
+              $addToSet: { editors: userId }, // <-- add this line
+            }
           );
         }
       );
@@ -200,9 +211,12 @@ function authMiddleware(req, res, next) {
 }
 
 app.get("/whiteboards", authMiddleware, async (req, res) => {
+  const userId = req.user.userId;
   const boards = await whiteboards
-    .find({ userId: req.user.userId })
-    .sort({ updatedAt: -1 }) // 👈 sort by updatedAt, newest first
+    .find({
+      $or: [{ userId }, { editors: userId }],
+    })
+    .sort({ updatedAt: -1 })
     .toArray();
 
   res.json(boards);
