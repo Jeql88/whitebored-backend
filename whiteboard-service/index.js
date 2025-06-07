@@ -24,6 +24,9 @@ const client = new MongoClient(MONGO_URI);
 
 let whiteboards, drawEvents;
 
+// --- Presence tracking ---
+const whiteboardUsers = {}; // { [whiteboardId]: [ { userId, username, socketId } ] }
+
 client.connect().then(() => {
   const db = client.db("whiteboard");
   whiteboards = db.collection("whiteboards");
@@ -34,7 +37,7 @@ client.connect().then(() => {
     const token = socket.handshake.auth?.token;
     if (!token) {
       // Guest user
-      socket.user = { userId: socket.id, isGuest: true };
+      socket.user = { userId: socket.id, isGuest: true, username: "Guest" };
       return next();
     }
     try {
@@ -49,6 +52,8 @@ client.connect().then(() => {
   io.on("connection", (socket) => {
     socket.on("joinWhiteboard", async (whiteboardId) => {
       socket.join(whiteboardId);
+      socket.whiteboardId = whiteboardId; // Track which board this socket is in
+
       const events = await drawEvents.find({ whiteboardId }).toArray();
       // Send all strokes with userId
       events.forEach((event) => {
@@ -59,7 +64,11 @@ client.connect().then(() => {
         }
       });
 
-      // Drawing a new stroke
+      socket.on("chatMessage", (msg) => {
+        // Broadcast only to users in the same whiteboard room
+        io.to(whiteboardId).emit("chatMessage", msg);
+      });
+
       // Drawing a new stroke (pen or eraser)
       socket.on(
         "drawStroke",
@@ -85,7 +94,7 @@ client.connect().then(() => {
             { _id: new ObjectId(whiteboardId) },
             {
               $set: { updatedAt: new Date() },
-              $addToSet: { editors: userId }, // <-- add this line
+              $addToSet: { editors: userId },
             }
           );
         }
@@ -124,12 +133,13 @@ client.connect().then(() => {
             { _id: new ObjectId(whiteboardId) },
             {
               $set: { updatedAt: new Date() },
-              $addToSet: { editors: userId }, // <-- add this line
+              $addToSet: { editors: userId },
             }
           );
         }
       );
 
+      // Update a text box
       socket.on(
         "updateTextBox",
         async ({
@@ -194,6 +204,41 @@ client.connect().then(() => {
         await drawEvents.deleteMany({ whiteboardId });
         io.to(whiteboardId).emit("clearBoard");
       });
+
+      // --- Presence tracking ---
+      socket.on("presence", ({ whiteboardId, userId, username }) => {
+        if (!whiteboardUsers[whiteboardId]) whiteboardUsers[whiteboardId] = [];
+        // Remove any existing entry for this socket
+        whiteboardUsers[whiteboardId] = whiteboardUsers[whiteboardId].filter(
+          (u) => u.socketId !== socket.id
+        );
+        whiteboardUsers[whiteboardId].push({
+          userId,
+          username,
+          socketId: socket.id,
+        });
+        io.to(whiteboardId).emit(
+          "whiteboardUsers",
+          whiteboardUsers[whiteboardId]
+        );
+      });
+
+      // Remove user from all whiteboards on disconnect
+      socket.on("disconnect", () => {
+        for (const [whiteboardId, users] of Object.entries(whiteboardUsers)) {
+          const before = users.length;
+          whiteboardUsers[whiteboardId] = users.filter(
+            (u) => u.socketId !== socket.id
+          );
+          if (whiteboardUsers[whiteboardId].length !== before) {
+            io.to(whiteboardId).emit(
+              "whiteboardUsers",
+              whiteboardUsers[whiteboardId]
+            );
+          }
+        }
+      });
+      // --- End presence tracking ---
     });
   });
 
