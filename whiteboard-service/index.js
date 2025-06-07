@@ -28,6 +28,7 @@ client.connect().then(() => {
   const db = client.db("whiteboard");
   whiteboards = db.collection("whiteboards");
   drawEvents = db.collection("drawEvents");
+  comments = db.collection("comments");
 
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
@@ -291,6 +292,61 @@ app.delete("/whiteboards/:id", authMiddleware, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+app.get("/whiteboards/:id/comments", authMiddleware, async (req, res) => {
+  const whiteboardId = req.params.id;
+  const result = await comments
+    .find({ whiteboardId })
+    .sort({ createdAt: 1 })
+    .toArray();
+  res.json(result);
+});
+
+app.post("/whiteboards/:id/comments", authMiddleware, async (req, res) => {
+  const whiteboardId = req.params.id;
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: "No comment text" });
+
+  // Fetch the user from the users collection
+  const users = client.db("whiteboard").collection("users");
+  const user = await users.findOne({ _id: new ObjectId(req.user.userId) });
+  const userName = user?.username || user?.name || "Anonymous";
+
+  const comment = {
+    whiteboardId,
+    userId: req.user.userId,
+    userName,
+    text,
+    createdAt: new Date(),
+  };
+  const result = await comments.insertOne(comment);
+  res.json({ ...comment, _id: result.insertedId });
+  io.to(whiteboardId).emit("newComment", {
+    ...comment,
+    _id: result.insertedId,
+  });
+});
+
+app.delete(
+  "/whiteboards/:id/comments/:commentId",
+  authMiddleware,
+  async (req, res) => {
+    const { id: whiteboardId, commentId } = req.params;
+    const userId = req.user.userId;
+    const result = await comments.deleteOne({
+      _id: new ObjectId(commentId),
+      whiteboardId,
+      userId,
+    });
+    if (result.deletedCount === 0) {
+      return res
+        .status(404)
+        .json({ error: "Comment not found or unauthorized" });
+    }
+    res.json({ success: true });
+    io.to(whiteboardId).emit("deleteComment", { _id: commentId });
+  }
+);
 
 server.listen(4000, () => {
   console.log("Whiteboard service running on port 4000");
