@@ -22,7 +22,7 @@ const MONGO_URI =
   "mongodb+srv://josh:febuary24@whiteboard.b8ugc30.mongodb.net/?retryWrites=true&w=majority&appName=Whiteboard";
 const client = new MongoClient(MONGO_URI);
 
-let whiteboards, drawEvents;
+let whiteboards, drawEvents, comments;
 
 // --- Presence tracking ---
 const whiteboardUsers = {}; // { [whiteboardId]: [ { userId, username, socketId } ] }
@@ -55,17 +55,19 @@ client.connect().then(() => {
       socket.whiteboardId = whiteboardId; // Track which board this socket is in
 
       const events = await drawEvents.find({ whiteboardId }).toArray();
-      // Send all strokes with userId
       events.forEach((event) => {
-        if (event.type === "text") {
+        if (event.type === "background") {
+          socket.emit("setBackgroundColor", { color: event.color });
+        } else if (event.type === "text") {
           socket.emit("addTextBox", event);
+        } else if (event.type === "image") {
+          socket.emit("addImage", event);
         } else {
           socket.emit("drawStroke", event);
         }
       });
 
       socket.on("chatMessage", (msg) => {
-        // Broadcast only to users in the same whiteboard room
         io.to(whiteboardId).emit("chatMessage", msg);
       });
 
@@ -238,6 +240,84 @@ client.connect().then(() => {
           }
         }
       });
+
+      // --- IMAGE EVENTS ---
+
+      // Add image
+      socket.on(
+        "addImage",
+        async ({ src, x, y, width, height, whiteboardId }) => {
+          const userId = socket.user.userId;
+          const result = await drawEvents.insertOne({
+            type: "image",
+            src,
+            x,
+            y,
+            width,
+            height,
+            whiteboardId,
+            userId,
+            createdAt: new Date(),
+          });
+          io.to(whiteboardId).emit("addImage", {
+            _id: result.insertedId,
+            type: "image",
+            src,
+            x,
+            y,
+            width,
+            height,
+            userId,
+          });
+        }
+      );
+
+      // Update image (move/resize)
+      socket.on(
+        "updateImage",
+        async ({ _id, x, y, width, height, whiteboardId }) => {
+          const result = await drawEvents.updateOne(
+            { _id: new ObjectId(_id), whiteboardId },
+            { $set: { x, y, width, height } }
+          );
+          if (result.matchedCount > 0) {
+            io.to(whiteboardId).emit("updateImage", {
+              _id,
+              x,
+              y,
+              width,
+              height,
+            });
+          }
+        }
+      );
+
+      // Remove image
+      socket.on("removeImage", async ({ _id, whiteboardId }) => {
+        const userId = socket.user.userId;
+        const result = await drawEvents.deleteOne({
+          _id: new ObjectId(_id),
+          whiteboardId,
+          userId,
+        });
+        if (result.deletedCount > 0) {
+          io.to(whiteboardId).emit("removeImage", { _id });
+        }
+      });
+
+      // Set background color
+      socket.on("setBackgroundColor", async ({ color, whiteboardId }) => {
+        // Remove any previous background color event for this board
+        await drawEvents.deleteMany({ whiteboardId, type: "background" });
+        // Insert new background color event
+        await drawEvents.insertOne({
+          type: "background",
+          color,
+          whiteboardId,
+          createdAt: new Date(),
+        });
+        io.to(whiteboardId).emit("setBackgroundColor", { color });
+      });
       // --- End presence tracking ---
     });
   });
@@ -285,8 +365,6 @@ app.patch("/whiteboards/:id", authMiddleware, async (req, res) => {
   const whiteboardId = req.params.id;
   const userId = req.user.userId;
   const { name } = req.body;
-
-  console.log("PATCH /whiteboards/:id called with:", whiteboardId, userId);
 
   if (!name) {
     return res.status(400).json({ error: "New name is required" });
