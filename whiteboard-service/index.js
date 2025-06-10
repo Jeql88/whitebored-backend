@@ -62,6 +62,8 @@ client.connect().then(() => {
           socket.emit("addTextBox", event);
         } else if (event.type === "image") {
           socket.emit("addImage", event);
+        } else if (event.type === "shape") {
+          socket.emit("addShape", event);
         } else {
           socket.emit("drawStroke", event);
         }
@@ -72,35 +74,34 @@ client.connect().then(() => {
       });
 
       // Drawing a new stroke (pen or eraser)
-      socket.on(
-        "drawStroke",
-        async ({ points, color = "black", width = 2 }) => {
-          const userId = socket.user.userId;
-          const result = await drawEvents.insertOne({
-            type: "stroke",
-            points,
-            color,
-            width,
-            whiteboardId,
-            userId,
-          });
-          io.to(whiteboardId).emit("drawStroke", {
-            _id: result.insertedId,
-            type: "stroke",
-            points,
-            color,
-            width,
-            userId,
-          });
-          await whiteboards.updateOne(
-            { _id: new ObjectId(whiteboardId) },
-            {
-              $set: { updatedAt: new Date() },
-              $addToSet: { editors: userId },
-            }
-          );
-        }
-      );
+      socket.on("drawStroke", async (payload) => {
+        if (!payload || !payload.points) return; // Prevent crash on bad payload
+        const { points, color = "black", width = 2 } = payload;
+        const userId = socket.user.userId;
+        const result = await drawEvents.insertOne({
+          type: "stroke",
+          points,
+          color,
+          width,
+          whiteboardId,
+          userId,
+        });
+        io.to(whiteboardId).emit("drawStroke", {
+          _id: result.insertedId,
+          type: "stroke",
+          points,
+          color,
+          width,
+          userId,
+        });
+        await whiteboards.updateOne(
+          { _id: new ObjectId(whiteboardId) },
+          {
+            $set: { updatedAt: new Date() },
+            $addToSet: { editors: userId },
+          }
+        );
+      });
 
       // Add a text box
       socket.on(
@@ -317,6 +318,73 @@ client.connect().then(() => {
           createdAt: new Date(),
         });
         io.to(whiteboardId).emit("setBackgroundColor", { color });
+      });
+
+      socket.on(
+        "addShape",
+        async ({ type, x, y, x2, y2, color, width, whiteboardId }) => {
+          const userId = socket.user.userId;
+          const result = await drawEvents.insertOne({
+            type: "shape",
+            shapeType: type,
+            x,
+            y,
+            x2,
+            y2,
+            color,
+            width,
+            whiteboardId,
+            userId,
+            createdAt: new Date(),
+          });
+          io.to(whiteboardId).emit("addShape", {
+            _id: result.insertedId,
+            type: "shape",
+            shapeType: type,
+            x,
+            y,
+            x2,
+            y2,
+            color,
+            width,
+            userId,
+          });
+        }
+      );
+
+      // Update shape (move/resize)
+      socket.on(
+        "updateShape",
+        async ({ _id, x, y, x2, y2, color, width, whiteboardId }) => {
+          const result = await drawEvents.updateOne(
+            { _id: new ObjectId(_id), whiteboardId },
+            { $set: { x, y, x2, y2, color, width } }
+          );
+          if (result.matchedCount > 0) {
+            io.to(whiteboardId).emit("updateShape", {
+              _id,
+              x,
+              y,
+              x2,
+              y2,
+              color,
+              width,
+            });
+          }
+        }
+      );
+
+      // Remove shape
+      socket.on("removeShape", async ({ _id, whiteboardId }) => {
+        const userId = socket.user.userId;
+        const result = await drawEvents.deleteOne({
+          _id: new ObjectId(_id),
+          whiteboardId,
+          userId,
+        });
+        if (result.deletedCount > 0) {
+          io.to(whiteboardId).emit("removeShape", { _id });
+        }
       });
       // --- End presence tracking ---
     });
